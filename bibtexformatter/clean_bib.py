@@ -78,6 +78,17 @@ CONFERENCE_RULES: Dict[str, Dict[str, List[str] | str]] = {
             "emnlp",
         ],
     },
+    "JMLR": {
+        "canonical": "Journal of Machine Learning Research (JMLR)",
+        "patterns": [
+            r"\bjournal of machine learning research\b",
+            r"\bjmlr\b",
+        ],
+        "fuzzy_targets": [
+            "journal of machine learning research",
+            "jmlr",
+        ],
+    },
 }
 
 
@@ -260,22 +271,75 @@ def format_entry(entry_type: str, key: str, fields: List[Field]) -> str:
     return "\n".join(lines)
 
 
-def transform_entry(entry_text: str) -> Tuple[str, List[MatchInfo]]:
+def transform_entry(
+    entry_text: str,
+    *,
+    remove_note: bool = False,
+    remove_note_ignore_patterns: Optional[List[str]] = None,
+    remove_month: bool = False,
+    remove_number_doi_issn: bool = False,
+    remove_pages: bool = False,
+) -> Tuple[str, List[MatchInfo]]:
     entry_type, key, fields = parse_entry(entry_text)
+    entry_type_lower = entry_type.lower()
     if entry_type.lower() == "misc":
         entry_type = "article"
+        entry_type_lower = "article"
+
+    ignore_patterns = remove_note_ignore_patterns or []
+    remove_note_allowed = remove_note and entry_type_lower in {"inproceedings", "article"}
 
     matches: List[MatchInfo] = []
     for field in fields:
         if field.name is None:
             continue
         lname = field.name.lower()
+        if remove_pages and lname == "pages":
+            field.name = None
+            field.raw = None
+            field.value = ""
+            continue
+        if remove_number_doi_issn and lname in {"number", "doi", "issn"}:
+            field.name = None
+            field.raw = None
+            field.value = ""
+            continue
+        if remove_month and lname == "month":
+            field.name = None
+            field.raw = None
+            field.value = ""
+            continue
+        if remove_note_allowed and lname == "note":
+            note_text = unwrap_value(field.value)
+            if any(re.search(pattern, note_text, flags=re.IGNORECASE) for pattern in ignore_patterns):
+                field.value = normalize_non_title_value(field.value)
+            else:
+                field.name = None
+                field.raw = None
+                field.value = ""
+                continue
         if lname == "archiveprefix":
             field.name = "journal"
         elif lname == "eprint":
             field.name = "volume"
         elif lname == "title":
             field.value = normalize_title_value(field.value)
+        elif lname == "journal" and entry_type_lower == "article":
+            canonical, rule = match_conference(field.value)
+            if canonical and rule:
+                original_value = field.value
+                field.value = "{" + canonical + "}"
+                matches.append(
+                    MatchInfo(
+                        key=key,
+                        field="journal",
+                        original_value=original_value,
+                        normalized_value=field.value,
+                        rule=rule,
+                    )
+                )
+            else:
+                field.value = normalize_non_title_value(field.value)
         elif lname == "booktitle":
             canonical, rule = match_conference(field.value)
             if canonical and rule:
@@ -295,10 +359,21 @@ def transform_entry(entry_text: str) -> Tuple[str, List[MatchInfo]]:
         else:
             field.value = normalize_non_title_value(field.value)
 
+    if remove_note_allowed or remove_month or remove_number_doi_issn or remove_pages:
+        fields = [field for field in fields if field.name is not None]
+
     return format_entry(entry_type, key, fields), matches
 
 
-def clean_bibtex(text: str) -> Tuple[str, List[str], List[MatchInfo]]:
+def clean_bibtex(
+    text: str,
+    *,
+    remove_note: bool = False,
+    remove_note_ignore_patterns: Optional[List[str]] = None,
+    remove_month: bool = False,
+    remove_number_doi_issn: bool = False,
+    remove_pages: bool = False,
+) -> Tuple[str, List[str], List[MatchInfo]]:
     parts = split_entries(text)
     out: List[str] = []
     matched_entries: List[str] = []
@@ -307,7 +382,14 @@ def clean_bibtex(text: str) -> Tuple[str, List[str], List[MatchInfo]]:
         if kind == "text":
             out.append(payload)
         else:
-            entry_text, matches = transform_entry(payload)
+            entry_text, matches = transform_entry(
+                payload,
+                remove_note=remove_note,
+                remove_note_ignore_patterns=remove_note_ignore_patterns,
+                remove_month=remove_month,
+                remove_number_doi_issn=remove_number_doi_issn,
+                remove_pages=remove_pages,
+            )
             out.append(entry_text)
             if matches:
                 matched_entries.append(entry_text)
@@ -324,12 +406,46 @@ def main() -> None:
         action="store_true",
         help="Print entries whose booktitle matches a venue rule",
     )
+    parser.add_argument(
+        "--remove-note",
+        action="store_true",
+        help="Remove all note fields",
+    )
+    parser.add_argument(
+        "--remove-month",
+        action="store_true",
+        help="Remove all month fields",
+    )
+    parser.add_argument(
+        "--remove-number-doi-issn",
+        action="store_true",
+        help="Remove number, doi, and issn fields",
+    )
+    parser.add_argument(
+        "--remove-pages",
+        action="store_true",
+        help="Remove pages field",
+    )
+    parser.add_argument(
+        "--remove-note-ignore",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Regex pattern to keep note fields (can be provided multiple times)",
+    )
     args = parser.parse_args()
 
     with open(args.input, "r", encoding="utf-8") as f:
         text = f.read()
 
-    cleaned, matched_entries, _ = clean_bibtex(text)
+    cleaned, matched_entries, _ = clean_bibtex(
+        text,
+        remove_note=args.remove_note,
+        remove_note_ignore_patterns=args.remove_note_ignore,
+        remove_month=args.remove_month,
+        remove_number_doi_issn=args.remove_number_doi_issn,
+        remove_pages=args.remove_pages,
+    )
 
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(cleaned)
