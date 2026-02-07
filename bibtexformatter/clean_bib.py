@@ -279,6 +279,7 @@ def transform_entry(
     remove_month: bool = False,
     remove_number_doi_issn: bool = False,
     remove_pages: bool = False,
+    remove_integer_volume: bool = False,
 ) -> Tuple[str, List[MatchInfo]]:
     entry_type, key, fields = parse_entry(entry_text)
     entry_type_lower = entry_type.lower()
@@ -322,6 +323,13 @@ def transform_entry(
             field.name = "journal"
         elif lname == "eprint":
             field.name = "volume"
+        if remove_integer_volume and lname == "volume":
+            volume_text = unwrap_value(field.value)
+            if re.fullmatch(r"\d+", volume_text) and "." not in volume_text:
+                field.name = None
+                field.raw = None
+                field.value = ""
+                continue
         elif lname == "title":
             field.value = normalize_title_value(field.value)
         elif lname == "journal" and entry_type_lower == "article":
@@ -359,7 +367,7 @@ def transform_entry(
         else:
             field.value = normalize_non_title_value(field.value)
 
-    if remove_note_allowed or remove_month or remove_number_doi_issn or remove_pages:
+    if remove_note_allowed or remove_month or remove_number_doi_issn or remove_pages or remove_integer_volume:
         fields = [field for field in fields if field.name is not None]
 
     return format_entry(entry_type, key, fields), matches
@@ -373,6 +381,7 @@ def clean_bibtex(
     remove_month: bool = False,
     remove_number_doi_issn: bool = False,
     remove_pages: bool = False,
+    remove_integer_volume: bool = False,
 ) -> Tuple[str, List[str], List[MatchInfo]]:
     parts = split_entries(text)
     out: List[str] = []
@@ -389,6 +398,7 @@ def clean_bibtex(
                 remove_month=remove_month,
                 remove_number_doi_issn=remove_number_doi_issn,
                 remove_pages=remove_pages,
+                remove_integer_volume=remove_integer_volume,
             )
             out.append(entry_text)
             if matches:
@@ -427,6 +437,11 @@ def main() -> None:
         help="Remove pages field",
     )
     parser.add_argument(
+        "--remove-integer-volume",
+        action="store_true",
+        help="Remove volume field if it is a single integer with no dot",
+    )
+    parser.add_argument(
         "--remove-note-ignore",
         action="append",
         default=[],
@@ -445,6 +460,7 @@ def main() -> None:
         remove_month=args.remove_month,
         remove_number_doi_issn=args.remove_number_doi_issn,
         remove_pages=args.remove_pages,
+        remove_integer_volume=args.remove_integer_volume,
     )
 
     with open(args.output, "w", encoding="utf-8") as f:
