@@ -89,6 +89,17 @@ CONFERENCE_RULES: Dict[str, Dict[str, List[str] | str]] = {
             "jmlr",
         ],
     },
+    "MLSys": {
+        "canonical": "Conference on Machine Learning and Systems (MLSys)",
+        "patterns": [
+            r"\bMachine Learning and Systems (MLSys)\b",
+            r"\bmlsys\b",
+        ],
+        "fuzzy_targets": [
+            "Machine Learning and Systems (MLSys)",
+            "mlsys",
+        ],
+    },
 }
 
 
